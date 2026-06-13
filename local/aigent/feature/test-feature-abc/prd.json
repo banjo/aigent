@@ -1,19 +1,32 @@
 {
     "project": "Aigent Local Target",
     "branchName": "aigent/test-feature",
-    "description": "Local fixture - add a completed task note",
+    "description": "Local fixture - add three ignored notes",
     "tasks": [
         {
             "id": "US-001",
-            "title": "Add a completion note",
-            "description": "Add a simple note to the target repo.",
-            "subtasks": [
-                "Create or update NOTES.md in the target repo",
-                "Add a short note saying the local Aigent loop completed US-001",
-                "Do not commit changes",
-                "Mark this task as passing in the external PRD"
-            ],
+            "title": "Add first note",
+            "description": "Add the first simple note to the target repo.",
+            "subtasks": ["Create notes directory in the target repo if it does not exist"],
             "priority": 1,
+            "passes": false,
+            "notes": ""
+        },
+        {
+            "id": "US-002",
+            "title": "Add second note",
+            "description": "Add the second simple note to the target repo.",
+            "subtasks": ["Create or update notes/note-2.md in the target repo"],
+            "priority": 2,
+            "passes": false,
+            "notes": ""
+        },
+        {
+            "id": "US-003",
+            "title": "Add third note",
+            "description": "Add the third simple note to the target repo.",
+            "subtasks": ["Create or update notes/note-3.md in the target repo"],
+            "priority": 3,
             "passes": false,
             "notes": ""
         }
