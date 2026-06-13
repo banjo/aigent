@@ -2,6 +2,7 @@
     "extends": ["@banjoanton/typescript-config", "@total-typescript/tsconfig/bundler/no-dom/library"],
     "compilerOptions": {
         "rootDir": ".",
+        "types": ["node"],
         "paths": {
             "@/*": ["./src/*"]
         }

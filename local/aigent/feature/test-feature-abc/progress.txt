@@ -1,0 +1,3 @@
+# Aigent Progress Log
+Started: local fixture
+---
