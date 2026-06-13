@@ -243,8 +243,12 @@ export const runCommand = defineCommand({
     args: {
         maxIterations: {
             type: "string",
-            description: "Maximum number of OpenCode iterations",
-            default: "10",
+            description: "Maximum number of OpenCode iterations. Defaults to task count plus extra iterations",
+        },
+        extraIterations: {
+            type: "string",
+            description: "Extra OpenCode iterations to run after one pass per task",
+            default: "3",
         },
         featureRoot: {
             type: "string",
@@ -261,10 +265,10 @@ export const runCommand = defineCommand({
         },
     },
     async run({ args }) {
-        const maxIterations = Number.parseInt(args.maxIterations, 10);
+        const extraIterations = Number.parseInt(args.extraIterations, 10);
 
-        if (!Number.isInteger(maxIterations) || maxIterations < 1) {
-            throw new Error("maxIterations must be a positive integer");
+        if (!Number.isInteger(extraIterations) || extraIterations < 0) {
+            throw new Error("extraIterations must be a non-negative integer");
         }
 
         const repositoryRoot = args.repositoryRoot
@@ -290,6 +294,25 @@ export const runCommand = defineCommand({
         if (typeof selected !== "string") {
             throw new Error("No feature selected");
         }
+
+        const selectedFeature = features.find(feature => feature.directory === selected);
+
+        if (!selectedFeature) {
+            throw new Error("Selected feature was not found");
+        }
+
+        const taskCount = selectedFeature.prd.tasks.length;
+        const maxIterations = args.maxIterations
+            ? Number.parseInt(args.maxIterations, 10)
+            : taskCount + extraIterations;
+
+        if (!Number.isInteger(maxIterations) || maxIterations < 1) {
+            throw new Error("maxIterations must be a positive integer");
+        }
+
+        console.log(
+            `Found ${taskCount} tasks, doing ${maxIterations} iterations (${extraIterations} extra)`
+        );
 
         await ensureProgressFile(selected);
 

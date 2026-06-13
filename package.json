@@ -36,7 +36,7 @@
         "prepublishOnly": "nr build",
         "release": "bumpp && npm publish",
         "start": "tsx src/bin.ts",
-        "start:fixture": "tsx src/bin.ts run --root local/aigent --repositoryRoot local/target-repo --maxIterations 1",
+        "start:fixture": "tsx src/bin.ts run --root local/aigent --repositoryRoot local/target-repo",
         "test": "vitest --watch=false",
         "test:dev": "vitest",
         "typecheck": "tsc --noEmit",
