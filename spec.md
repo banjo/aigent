@@ -24,12 +24,12 @@ Feature state lives outside the target repository. Aigent must not create PRD, m
     "project": "MyApp",
     "branchName": "ralph/task-priority",
     "description": "Task Priority System - Add priority levels to tasks",
-    "userStories": [
+    "tasks": [
         {
             "id": "US-001",
             "title": "Add priority field to database",
             "description": "As a developer, I need to store task priority so it persists across sessions.",
-            "acceptanceCriteria": ["Typecheck passes"],
+            "subtasks": ["Add the database field", "Run typecheck"],
             "priority": 1,
             "passes": false,
             "notes": ""
@@ -38,7 +38,7 @@ Feature state lives outside the target repository. Aigent must not create PRD, m
 }
 ```
 
-OpenCode works on one incomplete story per iteration. The highest priority story where `passes` is `false` is selected by the prompt. When a story is complete and checks pass, OpenCode updates this external PRD file and sets that story's `passes` field to `true`.
+OpenCode works on one incomplete task per iteration. The highest priority task where `passes` is `false` is selected by the prompt. `subtasks` is a string array with small steps or a suggested breakdown. When a task is complete and checks pass, OpenCode updates this external PRD file and sets that task's `passes` field to `true`.
 
 ## Meta Format
 
@@ -70,7 +70,7 @@ Behavior:
 5. Runs `opencode run --dir <repo> --dangerously-skip-permissions <prompt>` for up to 10 iterations.
 6. Stops early when OpenCode prints `<promise>COMPLETE</promise>`.
 
-OpenCode is not instructed to commit changes. Each iteration completes one story, updates external feature state, and stops. The next iteration continues with the next incomplete story.
+OpenCode is not instructed to commit changes. Each iteration completes one task, updates external feature state, and stops. The next iteration continues with the next incomplete task.
 
 Optional arguments:
 

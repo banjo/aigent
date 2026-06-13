@@ -11,11 +11,11 @@ type Prd = {
     project: string;
     branchName: string;
     description: string;
-    userStories: Array<{
+    tasks: Array<{
         id: string;
         title: string;
         description: string;
-        acceptanceCriteria: string[];
+        subtasks: string[];
         priority: number;
         passes: boolean;
         notes: string;
@@ -200,20 +200,20 @@ All Aigent state files are in this feature directory. Do not create PRD, progres
 1. Read the PRD file above.
 2. Read the progress log above, especially any Codebase Patterns section.
 3. Check you are on the correct branch from PRD \`branchName\`. If not, check it out or create it from the default branch.
-4. Pick the highest priority user story where \`passes: false\`.
-5. Implement that single user story.
+4. Pick the highest priority task where \`passes: false\`.
+5. Implement that single task. Use \`subtasks\` as small implementation steps or a suggested breakdown.
 6. Run the project's relevant quality checks.
-7. If checks pass, update the PRD file to set \`passes: true\` for the completed story.
+7. If checks pass, update the PRD file to set \`passes: true\` for the completed task.
 8. Append progress to the progress log in the feature directory.
 
-Do not commit changes. Finish one story, record progress, then stop so the next iteration can pick the next story.
+Do not commit changes. Finish one task, record progress, then stop so the next iteration can pick the next task.
 
 ## Progress Report Format
 
 Append to the progress.txt file in the feature directory, never replace it:
 
 \`\`\`
-## [Date/Time] - [Story ID]
+## [Date/Time] - [Task ID]
 - What was implemented
 - Files changed
 - **Learnings for future iterations:**
@@ -225,14 +225,14 @@ Append to the progress.txt file in the feature directory, never replace it:
 
 ## Stop Condition
 
-After completing a user story, check if all stories have \`passes: true\`.
+After completing a task, check if all tasks have \`passes: true\`.
 
-If all stories are complete and passing, reply with:
+If all tasks are complete and passing, reply with:
 <promise>COMPLETE</promise>
 
-If there are still incomplete stories, end normally so the next iteration can continue.
+If there are still incomplete tasks, end normally so the next iteration can continue.
 
-Work on one story per iteration. Keep changes focused and keep quality checks green.
+Work on one task per iteration. Keep changes focused and keep quality checks green.
 `;
 
 export const runCommand = defineCommand({

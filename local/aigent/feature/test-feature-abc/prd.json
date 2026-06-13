@@ -2,16 +2,16 @@
     "project": "Aigent Local Target",
     "branchName": "aigent/test-feature",
     "description": "Local fixture - add a completed task note",
-    "userStories": [
+    "tasks": [
         {
             "id": "US-001",
             "title": "Add a completion note",
-            "description": "As a local tester, I want OpenCode to make a small deterministic change in the target repo.",
-            "acceptanceCriteria": [
+            "description": "Add a simple note to the target repo.",
+            "subtasks": [
                 "Create or update NOTES.md in the target repo",
                 "Add a short note saying the local Aigent loop completed US-001",
                 "Do not commit changes",
-                "Mark this story as passing in the external PRD"
+                "Mark this task as passing in the external PRD"
             ],
             "priority": 1,
             "passes": false,
