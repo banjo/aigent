@@ -1,6 +1,7 @@
 import { select } from "@clack/prompts";
 import { defineCommand } from "citty";
 import { execa } from "execa";
+import { spawn } from "node:child_process";
 import type { Dirent } from "node:fs";
 import { readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -148,6 +149,37 @@ const ensureProgressFile = async (featureDirectory: string): Promise<void> => {
     await writeFile(path, `# Aigent Progress Log\nStarted: ${new Date().toISOString()}\n---\n`);
 };
 
+const runOpenCode = async ({ prompt, repositoryRoot }: { prompt: string; repositoryRoot: string }) => {
+    const subprocess = spawn(
+        "opencode",
+        ["run", "--dir", repositoryRoot, "--dangerously-skip-permissions", prompt],
+        {
+            stdio: ["inherit", "pipe", "pipe"],
+        }
+    );
+
+    let output = "";
+
+    subprocess.stdout.on("data", chunk => {
+        const text = chunk.toString();
+        output += text;
+        process.stdout.write(text);
+    });
+
+    subprocess.stderr.on("data", chunk => {
+        const text = chunk.toString();
+        output += text;
+        process.stderr.write(text);
+    });
+
+    const exitCode = await new Promise<number | undefined>((resolvePromise, rejectPromise) => {
+        subprocess.on("error", rejectPromise);
+        subprocess.on("close", code => resolvePromise(code ?? undefined));
+    });
+
+    return { output, exitCode };
+};
+
 const createPrompt = ({
     featureDirectory,
 }: {
@@ -266,24 +298,11 @@ export const runCommand = defineCommand({
         for (let index = 1; index <= maxIterations; index += 1) {
             console.log(`\nAigent iteration ${index} of ${maxIterations}`);
 
-            const subprocess = execa(
-                "opencode",
-                ["run", "--dir", repositoryRoot, "--dangerously-skip-permissions", prompt],
-                {
-                    all: true,
-                    reject: false,
-                }
-            );
+            const { output, exitCode } = await runOpenCode({ prompt, repositoryRoot });
 
-            let output = "";
-
-            subprocess.all?.on("data", chunk => {
-                const text = chunk.toString();
-                output += text;
-                process.stdout.write(text);
-            });
-
-            await subprocess;
+            if (exitCode && exitCode !== 0) {
+                throw new Error(`OpenCode exited with code ${exitCode}`);
+            }
 
             if (output.includes("<promise>COMPLETE</promise>")) {
                 console.log(`Completed all stories at iteration ${index}`);
