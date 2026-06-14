@@ -7,6 +7,7 @@ import { appendFile, readdir, readFile, stat, writeFile } from "node:fs/promises
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { styleText } from "node:util";
+import { createStatusServer, type RunStatus } from "../status-server";
 
 type PrdTask = {
     id: string;
@@ -75,6 +76,12 @@ type TextQueue = {
     fail: (error: unknown) => void;
     values: () => AsyncIterable<string>;
 };
+
+type RunOpenCodeUsageUpdate = {
+    usage: Usage;
+};
+
+const statusServerCloseDelayMs = 10_000;
 
 const emptyUsage = (): Usage => ({
     tokens: {
@@ -197,11 +204,13 @@ const getMatchingFeatures = async ({
                 return undefined;
             }
 
-            const metaRepositoryRoot = meta.repositoryRoot
-                ? isAbsolute(meta.repositoryRoot)
+            let metaRepositoryRoot: string | undefined;
+
+            if (meta.repositoryRoot) {
+                metaRepositoryRoot = isAbsolute(meta.repositoryRoot)
                     ? resolve(meta.repositoryRoot)
-                    : resolve(directory, meta.repositoryRoot)
-                : undefined;
+                    : resolve(directory, meta.repositoryRoot);
+            }
             const matchesRoot = metaRepositoryRoot ? metaRepositoryRoot === repositoryRoot : false;
             const matchesRemote =
                 remoteUrl && meta.remoteUrl ? meta.remoteUrl === remoteUrl : false;
@@ -248,6 +257,16 @@ const getNextTaskTitle = async (featureDirectory: string): Promise<string | unde
         .sort((first, second) => first.priority - second.priority)[0];
 
     return task ? `${task.id}: ${task.title}` : undefined;
+};
+
+const getFeaturePrd = async (featureDirectory: string, fallback: Prd): Promise<Prd> => {
+    return (await readJson<Prd>(join(featureDirectory, "prd.json"))) ?? fallback;
+};
+
+const wait = async (milliseconds: number): Promise<void> => {
+    await new Promise<void>(resolvePromise => {
+        setTimeout(resolvePromise, milliseconds);
+    });
 };
 
 const parseOpenCodeJsonLine = (line: string): OpenCodeEvent | undefined => {
@@ -319,11 +338,13 @@ const createTextQueue = (): TextQueue => {
 const runOpenCode = async ({
     label,
     model,
+    onUsageUpdate,
     prompt,
     repositoryRoot,
 }: {
     label: string;
     model: string | undefined;
+    onUsageUpdate?: (update: RunOpenCodeUsageUpdate) => void;
     prompt: string;
     repositoryRoot: string;
 }) => {
@@ -431,6 +452,7 @@ const runOpenCode = async ({
                 tokens: event.part.tokens,
                 cost: event.part.cost,
             });
+            onUsageUpdate?.({ usage });
         }
     };
 
@@ -641,48 +663,137 @@ export const runCommand = defineCommand({
 
         const prompt = createPrompt({ featureDirectory: selected });
         let usageTotal = emptyUsage();
+        let lastIterationUsage = emptyUsage();
+        let currentPrd = await getFeaturePrd(selected, selectedFeature.prd);
+        const startedAt = new Date().toISOString();
+        const createStatus = ({
+            currentIteration,
+            currentTask,
+            status,
+            message,
+            nextLastIterationUsage = lastIterationUsage,
+            nextUsageTotal = usageTotal,
+        }: {
+            currentIteration: number;
+            currentTask: string | undefined;
+            status: RunStatus["status"];
+            message: string;
+            nextLastIterationUsage?: Usage;
+            nextUsageTotal?: Usage;
+        }): RunStatus => ({
+            featureName: selectedFeature.name,
+            featureDescription: currentPrd.description,
+            repositoryRoot,
+            featureDirectory: selected,
+            maxIterations,
+            currentIteration,
+            currentTask,
+            status,
+            message,
+            prd: currentPrd,
+            usageTotal: nextUsageTotal,
+            lastIterationUsage: nextLastIterationUsage,
+            startedAt,
+            updatedAt: new Date().toISOString(),
+        });
+        const statusServer = await createStatusServer(createStatus({
+            currentIteration: 0,
+            currentTask: undefined,
+            status: "starting",
+            message: "Preparing the Ralph loop.",
+        }));
+        const logStatusServerCloseDelay = (): void => {
+            log.info(`Status dashboard will stay available for ${statusServerCloseDelayMs / 1000} seconds`);
+        };
 
-        for (let index = 1; index <= maxIterations; index += 1) {
-            const taskTitle = await getNextTaskTitle(selected);
-            const iterationLabel = taskTitle
-                ? `Iteration ${index}: ${taskTitle}`
-                : `Iteration ${index}`;
+        log.info(`Status dashboard: ${statusServer.url}`);
 
-            const { output, exitCode, sessionId, usage } = await runOpenCode({
-                label: iterationLabel,
-                model: args.model,
-                prompt,
-                repositoryRoot,
-            });
-            usageTotal = addUsage(usageTotal, usage);
+        try {
+            for (let index = 1; index <= maxIterations; index += 1) {
+                currentPrd = await getFeaturePrd(selected, currentPrd);
+                const taskTitle = await getNextTaskTitle(selected);
+                const iterationLabel = taskTitle
+                    ? `Iteration ${index}: ${taskTitle}`
+                    : `Iteration ${index}`;
 
-            await appendUsageRecord({
-                featureDirectory: selected,
-                record: {
-                    timestamp: new Date().toISOString(),
-                    iteration: index,
-                    sessionId,
-                    ...usage,
-                },
-            });
+                statusServer.update(createStatus({
+                    currentIteration: index,
+                    currentTask: taskTitle,
+                    status: "running",
+                    message: `Running ${iterationLabel}.`,
+                }));
 
-            log.info(`Iteration ${index} usage: ${formatUsage(usage)}`);
+                const { output, exitCode, sessionId, usage } = await runOpenCode({
+                    label: iterationLabel,
+                    model: args.model,
+                    onUsageUpdate({ usage: currentIterationUsage }) {
+                        statusServer.update(createStatus({
+                            currentIteration: index,
+                            currentTask: taskTitle,
+                            status: "running",
+                            message: `Running ${iterationLabel}.`,
+                            nextLastIterationUsage: currentIterationUsage,
+                            nextUsageTotal: addUsage(usageTotal, currentIterationUsage),
+                        }));
+                    },
+                    prompt,
+                    repositoryRoot,
+                });
+                lastIterationUsage = usage;
+                usageTotal = addUsage(usageTotal, usage);
+                currentPrd = await getFeaturePrd(selected, currentPrd);
 
-            if (exitCode && exitCode !== 0) {
-                log.error(`OpenCode exited with code ${exitCode}`);
-                throw new Error(`OpenCode exited with code ${exitCode}`);
+                await appendUsageRecord({
+                    featureDirectory: selected,
+                    record: {
+                        timestamp: new Date().toISOString(),
+                        iteration: index,
+                        sessionId,
+                        ...usage,
+                    },
+                });
+
+                log.info(`Iteration ${index} usage: ${formatUsage(usage)}`);
+
+                if (exitCode && exitCode !== 0) {
+                    statusServer.update(createStatus({
+                        currentIteration: index,
+                        currentTask: taskTitle,
+                        status: "error",
+                        message: `OpenCode exited with code ${exitCode}.`,
+                    }));
+                    log.error(`OpenCode exited with code ${exitCode}`);
+                    throw new Error(`OpenCode exited with code ${exitCode}`);
+                }
+
+                if (output.includes("<promise>COMPLETE</promise>")) {
+                    statusServer.update(createStatus({
+                        currentIteration: index,
+                        currentTask: undefined,
+                        status: "complete",
+                        message: "All tasks are complete.",
+                    }));
+                    log.success(`Completed all tasks at iteration ${index}`);
+                    log.success(`Final usage: ${formatUsage(usageTotal)}`);
+                    logStatusServerCloseDelay();
+                    outro("Aigent run complete");
+                    return;
+                }
             }
 
-            if (output.includes("<promise>COMPLETE</promise>")) {
-                log.success(`Completed all tasks at iteration ${index}`);
-                log.success(`Final usage: ${formatUsage(usageTotal)}`);
-                outro("Aigent run complete");
-                return;
-            }
+            statusServer.update(createStatus({
+                currentIteration: maxIterations,
+                currentTask: await getNextTaskTitle(selected),
+                status: "limit_reached",
+                message: `Reached max iterations (${maxIterations}) without completion.`,
+            }));
+            log.warn(`Final usage: ${formatUsage(usageTotal)}`);
+            logStatusServerCloseDelay();
+            outro("Aigent reached the iteration limit");
+            throw new Error(`Reached max iterations (${maxIterations}) without completion`);
+        } finally {
+            await wait(statusServerCloseDelayMs);
+            await statusServer.close();
         }
-
-        log.warn(`Final usage: ${formatUsage(usageTotal)}`);
-        outro("Aigent reached the iteration limit");
-        throw new Error(`Reached max iterations (${maxIterations}) without completion`);
     },
 });
