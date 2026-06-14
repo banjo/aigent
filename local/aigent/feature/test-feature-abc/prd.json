@@ -7,7 +7,9 @@
             "id": "US-001",
             "title": "Add first note",
             "description": "Add the first simple note to the target repo.",
-            "subtasks": ["Create notes directory in the target repo if it does not exist"],
+            "subtasks": [
+                "Create notes directory in the target repo if it does not exist with todays date"
+            ],
             "priority": 1,
             "passes": false,
             "notes": ""
@@ -16,7 +18,9 @@
             "id": "US-002",
             "title": "Add second note",
             "description": "Add the second simple note to the target repo.",
-            "subtasks": ["Create or update notes/note-2.md in the target repo"],
+            "subtasks": [
+                "Create or update notes/note-2.md in the target repo, add your favorite color"
+            ],
             "priority": 2,
             "passes": false,
             "notes": ""
@@ -25,7 +29,7 @@
             "id": "US-003",
             "title": "Add third note",
             "description": "Add the third simple note to the target repo.",
-            "subtasks": ["Create or update notes/note-3.md in the target repo"],
+            "subtasks": ["Create or update notes/note-3.md in the target repo, with a funny joke"],
             "priority": 3,
             "passes": false,
             "notes": ""

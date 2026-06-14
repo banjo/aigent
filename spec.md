@@ -73,7 +73,7 @@ Behavior:
 5. Counts tasks in the selected PRD and runs one iteration per task plus extra iterations.
 6. Runs `opencode run --dir <repo> --dangerously-skip-permissions --format json <prompt>` for each iteration.
 7. Streams OpenCode `text` events to the terminal while collecting token and cost data from `step_finish` events.
-8. Prints iteration usage and running total usage after each iteration.
+8. Prints iteration usage after each iteration.
 9. Appends iteration usage to `usage.jsonl` in the feature directory.
 10. Stops early when OpenCode prints `<promise>COMPLETE</promise>`.
 11. Prints final total usage when the run completes or reaches the iteration limit.
@@ -89,12 +89,14 @@ aigent run --root /path/to/.aigent
 aigent run --repositoryRoot /path/to/target-repo
 aigent run --maxIterations 3
 aigent run --extraIterations 2
+aigent run --model openai/gpt-5.5
 aigent run --featureRoot /path/to/.aigent/feature
 ```
 
 `--root` points at an Aigent root that contains a `feature` directory. `--featureRoot` can be used when the feature directory itself should be passed directly.
 `--repositoryRoot` bypasses Git repo discovery and is mainly useful for local fixtures.
 `--maxIterations` is an explicit override. `--extraIterations` controls the default buffer above task count and defaults to 3.
+`--model` is forwarded to `opencode run --model` and should use OpenCode's `provider/model` format.
 
 ## Usage Format
 

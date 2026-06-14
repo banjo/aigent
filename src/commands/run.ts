@@ -1,4 +1,4 @@
-import { cancel, intro, isCancel, log, outro, select } from "@clack/prompts";
+import { cancel, intro, isCancel, log, outro, select, spinner, stream } from "@clack/prompts";
 import { defineCommand } from "citty";
 import { execa } from "execa";
 import { spawn } from "node:child_process";
@@ -6,20 +6,23 @@ import type { Dirent } from "node:fs";
 import { appendFile, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { styleText } from "node:util";
+
+type PrdTask = {
+    id: string;
+    title: string;
+    description: string;
+    subtasks: string[];
+    priority: number;
+    passes: boolean;
+    notes: string;
+};
 
 type Prd = {
     project: string;
     branchName: string;
     description: string;
-    tasks: Array<{
-        id: string;
-        title: string;
-        description: string;
-        subtasks: string[];
-        priority: number;
-        passes: boolean;
-        notes: string;
-    }>;
+    tasks: PrdTask[];
 };
 
 type Meta = {
@@ -64,6 +67,13 @@ type OpenCodeEvent = {
         tokens?: TokenUsage;
         cost?: number;
     };
+};
+
+type TextQueue = {
+    push: (text: string) => void;
+    end: () => void;
+    fail: (error: unknown) => void;
+    values: () => AsyncIterable<string>;
 };
 
 const emptyUsage = (): Usage => ({
@@ -231,6 +241,15 @@ const appendUsageRecord = async ({
     await appendFile(join(featureDirectory, "usage.jsonl"), `${JSON.stringify(record)}\n`);
 };
 
+const getNextTaskTitle = async (featureDirectory: string): Promise<string | undefined> => {
+    const prd = await readJson<Prd>(join(featureDirectory, "prd.json"));
+    const task = prd?.tasks
+        .filter(nextTask => !nextTask.passes)
+        .sort((first, second) => first.priority - second.priority)[0];
+
+    return task ? `${task.id}: ${task.title}` : undefined;
+};
+
 const parseOpenCodeJsonLine = (line: string): OpenCodeEvent | undefined => {
     try {
         return JSON.parse(line) as OpenCodeEvent;
@@ -239,10 +258,100 @@ const parseOpenCodeJsonLine = (line: string): OpenCodeEvent | undefined => {
     }
 };
 
-const runOpenCode = async ({ prompt, repositoryRoot }: { prompt: string; repositoryRoot: string }) => {
+const getStreamSegmentLength = (): number => {
+    const columns = process.stdout.columns ?? 100;
+    return Math.max(columns - 12, 40);
+};
+
+const createTextQueue = (): TextQueue => {
+    const values: string[] = [];
+    const resolvers: Array<() => void> = [];
+    let ended = false;
+    let error: unknown;
+
+    const notify = (): void => {
+        const resolver = resolvers.shift();
+
+        if (resolver) {
+            resolver();
+        }
+    };
+
+    return {
+        push(text) {
+            values.push(text);
+            notify();
+        },
+        end() {
+            ended = true;
+            notify();
+        },
+        fail(nextError) {
+            error = nextError;
+            ended = true;
+            notify();
+        },
+        async *values() {
+            while (!ended || values.length > 0) {
+                const value = values.shift();
+
+                if (value !== undefined) {
+                    yield value;
+                    continue;
+                }
+
+                if (error !== undefined) {
+                    throw error;
+                }
+
+                await new Promise<void>(resolvePromise => {
+                    resolvers.push(resolvePromise);
+                });
+            }
+
+            if (error !== undefined) {
+                throw error;
+            }
+        },
+    };
+};
+
+const runOpenCode = async ({
+    label,
+    model,
+    prompt,
+    repositoryRoot,
+}: {
+    label: string;
+    model: string | undefined;
+    prompt: string;
+    repositoryRoot: string;
+}) => {
+    const iterationSpinner = spinner();
+    let streamStarted = false;
+
+    iterationSpinner.start(label);
+
+    const textQueue = createTextQueue();
+    let streamPromise: Promise<void> | undefined;
+    const args = [
+        "run",
+        "--dir",
+        repositoryRoot,
+        "--dangerously-skip-permissions",
+        "--format",
+        "json",
+    ];
+
+    if (model) {
+        args.push("--model", model);
+    }
+
+    args.push(prompt);
+
     const subprocess = spawn(
         "opencode",
-        ["run", "--dir", repositoryRoot, "--dangerously-skip-permissions", "--format", "json", prompt],
+        args,
         {
             stdio: ["inherit", "pipe", "pipe"],
         }
@@ -252,13 +361,68 @@ const runOpenCode = async ({ prompt, repositoryRoot }: { prompt: string; reposit
     let sessionId: string | undefined;
     let usage = emptyUsage();
     let stdoutBuffer = "";
+    let textBuffer = "";
+    const streamSegmentLength = getStreamSegmentLength();
+
+    const flushTextSegment = (segment: string): void => {
+        if (segment.trim().length === 0) {
+            return;
+        }
+
+        if (!streamStarted) {
+            streamStarted = true;
+            iterationSpinner.stop(label);
+            streamPromise = stream.message(textQueue.values());
+        }
+
+        textQueue.push(`${styleText("dim", segment.trimStart())}\n`);
+    };
+
+    const flushAvailableText = (): void => {
+        while (textBuffer.length > 0) {
+            const boundary = textBuffer.search(/\n|[.!?](?:\s|$)/);
+
+            if (boundary !== -1) {
+                const end = textBuffer[boundary] === "\n" ? boundary + 1 : boundary + 2;
+                flushTextSegment(textBuffer.slice(0, end));
+                textBuffer = textBuffer.slice(end);
+                continue;
+            }
+
+            if (textBuffer.length >= streamSegmentLength) {
+                flushTextSegment(textBuffer.slice(0, streamSegmentLength));
+                textBuffer = textBuffer.slice(streamSegmentLength);
+                continue;
+            }
+
+            return;
+        }
+    };
+
+    const appendText = (text: string): void => {
+        if (text.length === 0) {
+            return;
+        }
+
+        textBuffer += text;
+        flushAvailableText();
+    };
+
+    const flushTextBuffer = (): void => {
+        if (textBuffer.length === 0) {
+            return;
+        }
+
+        flushTextSegment(textBuffer);
+        textBuffer = "";
+    };
 
     const handleEvent = (event: OpenCodeEvent): void => {
         sessionId = event.sessionID ?? sessionId;
 
         if (event.type === "text" && event.part?.text) {
             output += event.part.text;
-            process.stdout.write(event.part.text);
+            appendText(event.part.text);
             return;
         }
 
@@ -289,11 +453,14 @@ const runOpenCode = async ({ prompt, repositoryRoot }: { prompt: string; reposit
     subprocess.stderr.on("data", chunk => {
         const text = chunk.toString();
         output += text;
-        process.stderr.write(text);
+        appendText(text);
     });
 
     const exitCode = await new Promise<number | undefined>((resolvePromise, rejectPromise) => {
-        subprocess.on("error", rejectPromise);
+        subprocess.on("error", error => {
+            textQueue.fail(error);
+            rejectPromise(error);
+        });
         subprocess.on("close", code => resolvePromise(code ?? undefined));
     });
 
@@ -303,6 +470,26 @@ const runOpenCode = async ({ prompt, repositoryRoot }: { prompt: string; reposit
         if (event) {
             handleEvent(event);
         }
+    }
+
+    flushTextBuffer();
+
+    if (!streamStarted) {
+        streamStarted = true;
+        iterationSpinner.stop(label);
+        streamPromise = stream.message(textQueue.values());
+    }
+
+    textQueue.end();
+
+    if (streamPromise) {
+        await streamPromise;
+    }
+
+    if (exitCode && exitCode !== 0) {
+        log.error(`OpenCode exited with code ${exitCode}`);
+    } else {
+        log.success("Iteration completed");
     }
 
     return { output, exitCode, sessionId, usage };
@@ -391,6 +578,10 @@ export const runCommand = defineCommand({
             type: "string",
             description: "Target repository root. Defaults to the current Git repository root",
         },
+        model: {
+            type: "string",
+            description: "OpenCode model to use, in provider/model format",
+        },
     },
     async run({ args }) {
         intro("aigent run");
@@ -453,9 +644,14 @@ export const runCommand = defineCommand({
         let usageTotal = emptyUsage();
 
         for (let index = 1; index <= maxIterations; index += 1) {
-            log.step(`Aigent iteration ${index} of ${maxIterations}`);
+            const taskTitle = await getNextTaskTitle(selected);
+            const iterationLabel = taskTitle
+                ? `Iteration ${index}: ${taskTitle}`
+                : `Iteration ${index}`;
 
             const { output, exitCode, sessionId, usage } = await runOpenCode({
+                label: iterationLabel,
+                model: args.model,
                 prompt,
                 repositoryRoot,
             });
@@ -472,7 +668,6 @@ export const runCommand = defineCommand({
             });
 
             log.info(`Iteration ${index} usage: ${formatUsage(usage)}`);
-            log.info(`Total usage: ${formatUsage(usageTotal)}`);
 
             if (exitCode && exitCode !== 0) {
                 log.error(`OpenCode exited with code ${exitCode}`);
