@@ -1,4 +1,4 @@
-import { select } from "@clack/prompts";
+import { cancel, intro, isCancel, log, outro, select } from "@clack/prompts";
 import { defineCommand } from "citty";
 import { execa } from "execa";
 import { spawn } from "node:child_process";
@@ -393,9 +393,12 @@ export const runCommand = defineCommand({
         },
     },
     async run({ args }) {
+        intro("aigent run");
+
         const extraIterations = Number.parseInt(args.extraIterations, 10);
 
         if (!Number.isInteger(extraIterations) || extraIterations < 0) {
+            log.error("extraIterations must be a non-negative integer");
             throw new Error("extraIterations must be a non-negative integer");
         }
 
@@ -407,7 +410,8 @@ export const runCommand = defineCommand({
         const features = await getMatchingFeatures({ featureRoot, repositoryRoot, remoteUrl });
 
         if (features.length === 0) {
-            console.log(`No features found for ${repositoryRoot} in ${featureRoot}`);
+            log.warn(`No features found for ${repositoryRoot} in ${featureRoot}`);
+            outro("No matching features found");
             return;
         }
 
@@ -419,13 +423,15 @@ export const runCommand = defineCommand({
             })),
         });
 
-        if (typeof selected !== "string") {
-            throw new Error("No feature selected");
+        if (isCancel(selected)) {
+            cancel("Feature selection cancelled");
+            return;
         }
 
         const selectedFeature = features.find(feature => feature.directory === selected);
 
         if (!selectedFeature) {
+            log.error("Selected feature was not found");
             throw new Error("Selected feature was not found");
         }
 
@@ -435,12 +441,11 @@ export const runCommand = defineCommand({
             : taskCount + extraIterations;
 
         if (!Number.isInteger(maxIterations) || maxIterations < 1) {
+            log.error("maxIterations must be a positive integer");
             throw new Error("maxIterations must be a positive integer");
         }
 
-        console.log(
-            `Found ${taskCount} tasks, doing ${maxIterations} iterations (${extraIterations} extra)`
-        );
+        log.info(`Found ${taskCount} tasks, doing ${maxIterations} iterations (${extraIterations} extra)`);
 
         await ensureProgressFile(selected);
 
@@ -448,7 +453,7 @@ export const runCommand = defineCommand({
         let usageTotal = emptyUsage();
 
         for (let index = 1; index <= maxIterations; index += 1) {
-            console.log(`\nAigent iteration ${index} of ${maxIterations}`);
+            log.step(`Aigent iteration ${index} of ${maxIterations}`);
 
             const { output, exitCode, sessionId, usage } = await runOpenCode({
                 prompt,
@@ -466,21 +471,24 @@ export const runCommand = defineCommand({
                 },
             });
 
-            console.log(`\nIteration ${index} usage: ${formatUsage(usage)}`);
-            console.log(`Total usage: ${formatUsage(usageTotal)}`);
+            log.info(`Iteration ${index} usage: ${formatUsage(usage)}`);
+            log.info(`Total usage: ${formatUsage(usageTotal)}`);
 
             if (exitCode && exitCode !== 0) {
+                log.error(`OpenCode exited with code ${exitCode}`);
                 throw new Error(`OpenCode exited with code ${exitCode}`);
             }
 
             if (output.includes("<promise>COMPLETE</promise>")) {
-                console.log(`Completed all tasks at iteration ${index}`);
-                console.log(`Final usage: ${formatUsage(usageTotal)}`);
+                log.success(`Completed all tasks at iteration ${index}`);
+                log.success(`Final usage: ${formatUsage(usageTotal)}`);
+                outro("Aigent run complete");
                 return;
             }
         }
 
-        console.log(`Final usage: ${formatUsage(usageTotal)}`);
+        log.warn(`Final usage: ${formatUsage(usageTotal)}`);
+        outro("Aigent reached the iteration limit");
         throw new Error(`Reached max iterations (${maxIterations}) without completion`);
     },
 });
