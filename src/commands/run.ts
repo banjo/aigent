@@ -514,12 +514,11 @@ All Aigent state files are in this feature directory. Do not create PRD, progres
 
 1. Read the PRD file above.
 2. Read the progress log above, especially any Codebase Patterns section.
-3. Check you are on the correct branch from PRD \`branchName\`. If not, check it out or create it from the default branch.
-4. Pick the highest priority task where \`passes: false\`.
-5. Implement that single task. Use \`subtasks\` as small implementation steps or a suggested breakdown.
-6. Run the project's relevant quality checks.
-7. If checks pass, update the PRD file to set \`passes: true\` for the completed task.
-8. Append progress to the progress log in the feature directory.
+3. Pick the highest priority task where \`passes: false\`.
+4. Implement that single task. Use \`subtasks\` as small implementation steps or a suggested breakdown.
+5. Run the project's relevant quality checks.
+6. If checks pass, update the PRD file to set \`passes: true\` for the completed task.
+7. Append progress to the progress log in the feature directory.
 
 Do not commit changes. Finish one task, record progress, then stop so the next iteration can pick the next task.
 
