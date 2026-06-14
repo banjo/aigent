@@ -3,6 +3,9 @@
     "type": "module",
     "version": "0.0.1",
     "private": false,
+    "publishConfig": {
+        "access": "public"
+    },
     "description": "",
     "author": "Anton Ödman <anton.odman@gmail.com>",
     "license": "MIT",
