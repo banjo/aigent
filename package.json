@@ -1,5 +1,5 @@
 {
-    "name": "aigent",
+    "name": "@banjoanton/aigent",
     "type": "module",
     "version": "0.0.1",
     "private": false,
