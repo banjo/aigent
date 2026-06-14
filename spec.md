@@ -11,9 +11,12 @@ Feature state lives outside the target repository. Aigent must not create PRD, m
   prd.json
   meta.json
   progress.txt
+  usage.jsonl
 ```
 
 `progress.txt` is created in the feature folder by `aigent run` if it does not exist.
+
+`usage.jsonl` is appended by `aigent run` after each OpenCode iteration. It stores machine-readable token and cost usage outside the target repository.
 
 ## PRD Format
 
@@ -67,10 +70,17 @@ Behavior:
 2. Scans `~/.aigent/feature` recursively for directories containing both `prd.json` and `meta.json`.
 3. Filters features that belong to the current repository.
 4. Prompts the user to choose a feature.
-5. Runs `opencode run --dir <repo> --dangerously-skip-permissions <prompt>` for up to 10 iterations.
-6. Stops early when OpenCode prints `<promise>COMPLETE</promise>`.
+5. Counts tasks in the selected PRD and runs one iteration per task plus extra iterations.
+6. Runs `opencode run --dir <repo> --dangerously-skip-permissions --format json <prompt>` for each iteration.
+7. Streams OpenCode `text` events to the terminal while collecting token and cost data from `step_finish` events.
+8. Prints iteration usage and running total usage after each iteration.
+9. Appends iteration usage to `usage.jsonl` in the feature directory.
+10. Stops early when OpenCode prints `<promise>COMPLETE</promise>`.
+11. Prints final total usage when the run completes or reaches the iteration limit.
 
 OpenCode is not instructed to commit changes. Each iteration completes one task, updates external feature state, and stops. The next iteration continues with the next incomplete task.
+
+By default, the maximum iteration count is `taskCount + 3`. For example, a PRD with 5 tasks runs up to 8 iterations and logs `Found 5 tasks, doing 8 iterations (3 extra)`.
 
 Optional arguments:
 
@@ -78,11 +88,23 @@ Optional arguments:
 aigent run --root /path/to/.aigent
 aigent run --repositoryRoot /path/to/target-repo
 aigent run --maxIterations 3
+aigent run --extraIterations 2
 aigent run --featureRoot /path/to/.aigent/feature
 ```
 
 `--root` points at an Aigent root that contains a `feature` directory. `--featureRoot` can be used when the feature directory itself should be passed directly.
 `--repositoryRoot` bypasses Git repo discovery and is mainly useful for local fixtures.
+`--maxIterations` is an explicit override. `--extraIterations` controls the default buffer above task count and defaults to 3.
+
+## Usage Format
+
+Each `usage.jsonl` line represents one OpenCode iteration:
+
+```json
+{"timestamp":"2026-06-14T10:00:00.000Z","iteration":1,"sessionId":"ses_123","tokens":{"total":12868,"input":63,"output":5,"reasoning":0,"cache":{"write":0,"read":12800}},"cost":0}
+```
+
+`prd.json` remains product and task state only. Token and cost usage belongs in `usage.jsonl`. `progress.txt` remains the human-readable implementation log maintained by the agent.
 
 ## Local Fixture
 
@@ -94,8 +116,10 @@ local/
     prd.json
     meta.json
     progress.txt
+    usage.jsonl
   target-repo/
     README.md
+    notes/
 ```
 
 Run the local fixture from the repository root:

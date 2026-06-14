@@ -3,7 +3,7 @@ import { defineCommand } from "citty";
 import { execa } from "execa";
 import { spawn } from "node:child_process";
 import type { Dirent } from "node:fs";
-import { readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { appendFile, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -31,6 +31,78 @@ type Feature = {
     name: string;
     directory: string;
     prd: Prd;
+};
+
+type TokenUsage = {
+    total: number;
+    input: number;
+    output: number;
+    reasoning: number;
+    cache: {
+        write: number;
+        read: number;
+    };
+};
+
+type Usage = {
+    tokens: TokenUsage;
+    cost: number;
+};
+
+type UsageRecord = Usage & {
+    timestamp: string;
+    iteration: number;
+    sessionId: string | undefined;
+};
+
+type OpenCodeEvent = {
+    type?: string;
+    sessionID?: string;
+    part?: {
+        type?: string;
+        text?: string;
+        tokens?: TokenUsage;
+        cost?: number;
+    };
+};
+
+const emptyUsage = (): Usage => ({
+    tokens: {
+        total: 0,
+        input: 0,
+        output: 0,
+        reasoning: 0,
+        cache: {
+            write: 0,
+            read: 0,
+        },
+    },
+    cost: 0,
+});
+
+const addUsage = (total: Usage, usage: Usage): Usage => ({
+    tokens: {
+        total: total.tokens.total + usage.tokens.total,
+        input: total.tokens.input + usage.tokens.input,
+        output: total.tokens.output + usage.tokens.output,
+        reasoning: total.tokens.reasoning + usage.tokens.reasoning,
+        cache: {
+            write: total.tokens.cache.write + usage.tokens.cache.write,
+            read: total.tokens.cache.read + usage.tokens.cache.read,
+        },
+    },
+    cost: total.cost + usage.cost,
+});
+
+const formatUsage = (usage: Usage): string => {
+    const tokens = usage.tokens;
+    const cost = new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 6,
+    }).format(usage.cost);
+
+    return `${cost}, ${tokens.total.toLocaleString("en-US")} tokens (${tokens.input.toLocaleString("en-US")} input, ${tokens.output.toLocaleString("en-US")} output, ${tokens.reasoning.toLocaleString("en-US")} reasoning, ${tokens.cache.read.toLocaleString("en-US")} cache read, ${tokens.cache.write.toLocaleString("en-US")} cache write)`;
 };
 
 const fileExists = async (path: string): Promise<boolean> => {
@@ -149,21 +221,69 @@ const ensureProgressFile = async (featureDirectory: string): Promise<void> => {
     await writeFile(path, `# Aigent Progress Log\nStarted: ${new Date().toISOString()}\n---\n`);
 };
 
+const appendUsageRecord = async ({
+    featureDirectory,
+    record,
+}: {
+    featureDirectory: string;
+    record: UsageRecord;
+}): Promise<void> => {
+    await appendFile(join(featureDirectory, "usage.jsonl"), `${JSON.stringify(record)}\n`);
+};
+
+const parseOpenCodeJsonLine = (line: string): OpenCodeEvent | undefined => {
+    try {
+        return JSON.parse(line) as OpenCodeEvent;
+    } catch {
+        return undefined;
+    }
+};
+
 const runOpenCode = async ({ prompt, repositoryRoot }: { prompt: string; repositoryRoot: string }) => {
     const subprocess = spawn(
         "opencode",
-        ["run", "--dir", repositoryRoot, "--dangerously-skip-permissions", prompt],
+        ["run", "--dir", repositoryRoot, "--dangerously-skip-permissions", "--format", "json", prompt],
         {
             stdio: ["inherit", "pipe", "pipe"],
         }
     );
 
     let output = "";
+    let sessionId: string | undefined;
+    let usage = emptyUsage();
+    let stdoutBuffer = "";
+
+    const handleEvent = (event: OpenCodeEvent): void => {
+        sessionId = event.sessionID ?? sessionId;
+
+        if (event.type === "text" && event.part?.text) {
+            output += event.part.text;
+            process.stdout.write(event.part.text);
+            return;
+        }
+
+        if (event.type === "step_finish" && event.part?.tokens && event.part.cost !== undefined) {
+            usage = addUsage(usage, {
+                tokens: event.part.tokens,
+                cost: event.part.cost,
+            });
+        }
+    };
 
     subprocess.stdout.on("data", chunk => {
         const text = chunk.toString();
-        output += text;
-        process.stdout.write(text);
+        stdoutBuffer += text;
+
+        const lines = stdoutBuffer.split("\n");
+        stdoutBuffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+            const event = parseOpenCodeJsonLine(line);
+
+            if (event) {
+                handleEvent(event);
+            }
+        }
     });
 
     subprocess.stderr.on("data", chunk => {
@@ -177,7 +297,15 @@ const runOpenCode = async ({ prompt, repositoryRoot }: { prompt: string; reposit
         subprocess.on("close", code => resolvePromise(code ?? undefined));
     });
 
-    return { output, exitCode };
+    if (stdoutBuffer) {
+        const event = parseOpenCodeJsonLine(stdoutBuffer);
+
+        if (event) {
+            handleEvent(event);
+        }
+    }
+
+    return { output, exitCode, sessionId, usage };
 };
 
 const createPrompt = ({
@@ -317,22 +445,42 @@ export const runCommand = defineCommand({
         await ensureProgressFile(selected);
 
         const prompt = createPrompt({ featureDirectory: selected });
+        let usageTotal = emptyUsage();
 
         for (let index = 1; index <= maxIterations; index += 1) {
             console.log(`\nAigent iteration ${index} of ${maxIterations}`);
 
-            const { output, exitCode } = await runOpenCode({ prompt, repositoryRoot });
+            const { output, exitCode, sessionId, usage } = await runOpenCode({
+                prompt,
+                repositoryRoot,
+            });
+            usageTotal = addUsage(usageTotal, usage);
+
+            await appendUsageRecord({
+                featureDirectory: selected,
+                record: {
+                    timestamp: new Date().toISOString(),
+                    iteration: index,
+                    sessionId,
+                    ...usage,
+                },
+            });
+
+            console.log(`\nIteration ${index} usage: ${formatUsage(usage)}`);
+            console.log(`Total usage: ${formatUsage(usageTotal)}`);
 
             if (exitCode && exitCode !== 0) {
                 throw new Error(`OpenCode exited with code ${exitCode}`);
             }
 
             if (output.includes("<promise>COMPLETE</promise>")) {
-                console.log(`Completed all stories at iteration ${index}`);
+                console.log(`Completed all tasks at iteration ${index}`);
+                console.log(`Final usage: ${formatUsage(usageTotal)}`);
                 return;
             }
         }
 
+        console.log(`Final usage: ${formatUsage(usageTotal)}`);
         throw new Error(`Reached max iterations (${maxIterations}) without completion`);
     },
 });
